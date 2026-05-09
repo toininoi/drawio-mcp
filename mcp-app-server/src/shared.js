@@ -189,6 +189,19 @@ export function buildHtml(appWithDepsJs, pakoDeflateJs, mermaidJs, options)
         max-width: 100% !important;
         height: auto;
       }
+      /* During a layout-change mxMorphing, cells animate from old to
+         new positions. The SVG element + its wrappers were sized for
+         the OLD bbox, so cells passing through positions outside that
+         box get clipped until the post-morph sizeDidChange/camera fit
+         catches up. Blanket-override overflow + max-width on every
+         descendant of #diagram-container so we don't miss a wrapper
+         level — the outer #diagram-container itself keeps its
+         overflow: hidden so spillover is still clipped to the card
+         edge. */
+      #diagram-container.morph-active * {
+        overflow: visible !important;
+        max-width: none !important;
+      }
 
       #toolbar {
         display: none;
@@ -709,6 +722,28 @@ function isMermaidFlowchart(text)
     if (line === '' || line.indexOf('%%') === 0) continue;
     var first = line.split(/\\s+/)[0];
     return first === 'flowchart' || first === 'graph';
+  }
+  return false;
+}
+
+/**
+ * Returns true if the Mermaid text is a flowchart/graph declared with a
+ * horizontal orientation (LR or RL). Used to decide whether the layout
+ * button's alternative state should be horizontal flow or vertical flow.
+ */
+function isMermaidHorizontalFlowchart(text)
+{
+  if (text == null || typeof text !== 'string') return false;
+  var lines = text.split(/\\r?\\n/);
+  for (var i = 0; i < lines.length; i++)
+  {
+    var line = lines[i].trim();
+    if (line === '' || line.indexOf('%%') === 0) continue;
+    var parts = line.split(/\\s+/);
+    var first = parts[0];
+    if (first !== 'flowchart' && first !== 'graph') return false;
+    var orient = (parts[1] || '').toUpperCase();
+    return orient === 'LR' || orient === 'RL';
   }
   return false;
 }
@@ -1529,6 +1564,7 @@ function applyPostLayout(graph, algorithm, hints, onDone, onMorphStart)
               penDrawAllEdgesAfterMorph(graph);
             });
             notifySize('postLayout');
+            try { containerEl.classList.remove('morph-active'); } catch (_) {}
             done(true);
           });
           // Fire onMorphStart RIGHT BEFORE startAnimation: positions
@@ -1542,6 +1578,10 @@ function applyPostLayout(graph, algorithm, hints, onDone, onMorphStart)
           // Hide edges before morph starts so vertex animation isn't
           // visually polluted by misaligned waypoints during the move.
           hideAllEdgesForMorph(graph);
+          // Relax overflow on the SVG + mxgraph wrappers so cells
+          // passing through positions outside the OLD bbox aren't
+          // clipped before sizeDidChange/camera fit catches up.
+          try { containerEl.classList.add('morph-active'); } catch (_) {}
           morph.startAnimation();
         }
         catch (e)
@@ -3312,11 +3352,14 @@ function finalizeStreamingView(xml, opts)
   document.getElementById('zoom-out-btn').style.display = '';
   document.getElementById('zoom-fit-btn').style.display = '';
 
-  // Layout-cycle button: shown for diagrams where re-layout is
-  // meaningful — explicit verticalFlow/horizontalFlow postLayout, or
-  // any mermaid flowchart (whose default is mermaid's own layout).
+  // Layout button: shown for diagrams where re-layout is meaningful —
+  // explicit verticalFlow/horizontalFlow postLayout, or any mermaid
+  // flowchart (whose default is mermaid's own layout). The button
+  // toggles between "as authored" and a single alternative — horizontal
+  // flow when the request was horizontal (postLayout=horizontalFlow or
+  // mermaid flowchart with LR/RL orientation), vertical flow otherwise.
   // Capture original geometries BEFORE any postLayout runs so we can
-  // restore them when the user cycles back to "as authored".
+  // restore them when the user toggles back to "as authored".
   var showLayoutBtn = (opts.postLayout === 'verticalFlow' ||
                        opts.postLayout === 'horizontalFlow' ||
                        opts.isFlowchart === true);
@@ -3327,6 +3370,8 @@ function finalizeStreamingView(xml, opts)
       startNodeIds: opts.startNodeIds || null,
       endNodeIds: opts.endNodeIds || null
     };
+    var isHorizontal = (opts.postLayout === 'horizontalFlow') || opts.isHorizontal === true;
+    layoutAlternativeState = isHorizontal ? 'horizontal' : 'vertical';
     if (opts.postLayout === 'verticalFlow') currentLayoutState = 'vertical';
     else if (opts.postLayout === 'horizontalFlow') currentLayoutState = 'horizontal';
     else currentLayoutState = 'none';
@@ -3939,31 +3984,29 @@ function fitWholeScale()
  * recentVertexQueue makes the focus bbox fall back to the whole
  * diagram so the same code path produces a fit-whole target.
  */
-// --- Layout cycle button: as-authored / horizontal / vertical ---
+// --- Layout button: toggles between as-authored and one alternative ---
 //
-// The toolbar layout button cycles through three states. "none" means
-// the cells stay at their as-authored positions (the streamed XML or
-// mermaid layout). "horizontal" / "vertical" run ELK and morph the
-// cells to the new positions, with a parallel camera animation to fit
-// the new bbox.
+// The toolbar layout button has two states for any given diagram:
+// "none" (as-authored — cells stay at the streamed XML or mermaid
+// layout positions) and one of "horizontal" / "vertical" (ELK +
+// mxMorphing, with a parallel camera animation to fit the new bbox).
+// Which alternative is offered is decided per-diagram in
+// finalizeStreamingView — horizontal when the diagram was originally
+// requested horizontal (postLayout=horizontalFlow or a mermaid
+// flowchart with LR/RL orientation), vertical otherwise.
 //
 // Original geometries are captured ONCE at finalize so we can restore
-// them when the user cycles back to "none". Without this we'd lose
+// them when the user toggles back to "none". Without this we'd lose
 // the original layout permanently after the first ELK pass.
 var originalCellGeometries = null;
 // Edge styles are mutated by normalizeEdgesToRounded in the layered
 // ELK path (curved=1 → rounded=1, no curve). Restoring geometries
-// alone leaves edges drawn as right-angles when cycling back to "as
+// alone leaves edges drawn as right-angles when toggling back to "as
 // authored", so we capture styles too.
 var originalCellStyles = null;
 var lastLayoutHints = null;
 var currentLayoutState = 'none'; // 'none' | 'horizontal' | 'vertical'
-
-var LAYOUT_CYCLE_NEXT = {
-  'none': 'horizontal',
-  'horizontal': 'vertical',
-  'vertical': 'none'
-};
+var layoutAlternativeState = 'vertical'; // 'horizontal' | 'vertical' for the current diagram
 
 var LAYOUT_LABELS = {
   'none': 'as authored',
@@ -4023,7 +4066,7 @@ function updateLayoutButtonUi()
   if (iconNone) iconNone.style.display = (currentLayoutState === 'none') ? '' : 'none';
   if (iconH)    iconH.style.display    = (currentLayoutState === 'horizontal') ? '' : 'none';
   if (iconV)    iconV.style.display    = (currentLayoutState === 'vertical') ? '' : 'none';
-  var next = LAYOUT_CYCLE_NEXT[currentLayoutState] || 'horizontal';
+  var next = (currentLayoutState === 'none') ? layoutAlternativeState : 'none';
   layoutBtn.setAttribute('title',
     'Layout: ' + LAYOUT_LABELS[currentLayoutState] +
     ' (click for ' + LAYOUT_LABELS[next] + ')');
@@ -4071,6 +4114,7 @@ function applyLayoutChange(targetState)
           penDrawAllEdgesAfterMorph(streamGraph);
         });
         notifySize('layout-change');
+        try { containerEl.classList.remove('morph-active'); } catch (_) {}
         try
         {
           var newXml = serializeGraphXml(streamGraph);
@@ -4095,12 +4139,17 @@ function applyLayoutChange(targetState)
 
       // Hide edges before morph so vertices animate cleanly.
       hideAllEdgesForMorph(streamGraph);
+      // Relax overflow on the SVG + mxgraph wrappers so cells passing
+      // through positions outside the OLD bbox aren't clipped before
+      // sizeDidChange/camera fit catches up.
+      try { containerEl.classList.add('morph-active'); } catch (_) {}
       morph.startAnimation();
     }
     catch (e)
     {
       model.endUpdate();
       try { streamGraph.sizeDidChange(); } catch (_) {}
+      try { containerEl.classList.remove('morph-active'); } catch (_) {}
     }
     return;
   }
@@ -4388,7 +4437,8 @@ app.ontoolinputpartial = function(params)
           startNodeIds: args.startNodeIds || null,
           endNodeIds: args.endNodeIds || null,
           replaceMode: true,
-          isFlowchart: isMermaidFlowchart(partialMermaid)
+          isFlowchart: isMermaidFlowchart(partialMermaid),
+          isHorizontal: isMermaidHorizontalFlowchart(partialMermaid)
         };
 
         try { console.log('[drawio][stream] mermaid string closed (sibling key in partial) — firing early finalize'); } catch (_) {}
@@ -4535,7 +4585,8 @@ app.ontoolinput = function(params)
     mermaidPreviewEl.style.display = 'none';
     var mermaidOpts = Object.assign({}, layoutOpts, {
       replaceMode: true,
-      isFlowchart: isMermaidFlowchart(mermaidText)
+      isFlowchart: isMermaidFlowchart(mermaidText),
+      isHorizontal: isMermaidHorizontalFlowchart(mermaidText)
     });
 
     waitForGraphViewer()
@@ -4631,7 +4682,8 @@ app.ontoolresult = function(result)
       mermaidPreviewEl.style.display = 'none';
       var mermaidOpts = Object.assign({}, layoutOpts, {
         replaceMode: true,
-        isFlowchart: isMermaidFlowchart(mermaidText)
+        isFlowchart: isMermaidFlowchart(mermaidText),
+        isHorizontal: isMermaidHorizontalFlowchart(mermaidText)
       });
 
       waitForGraphViewer()
@@ -4732,10 +4784,12 @@ document.getElementById('zoom-fit-btn').addEventListener('click', function()
   dblclickZoomedIn = false;
 });
 
-// Layout cycle: as-authored → horizontal → vertical → as-authored.
+// Layout toggle: as-authored ↔ alternative (horizontal or vertical,
+// chosen per-diagram in finalizeStreamingView).
 layoutBtn.addEventListener('click', function()
 {
-  applyLayoutChange(LAYOUT_CYCLE_NEXT[currentLayoutState] || 'horizontal');
+  var next = (currentLayoutState === 'none') ? layoutAlternativeState : 'none';
+  applyLayoutChange(next);
 });
 
 // Help → opens a Discussions topic in the drawio-mcp repo. Use
