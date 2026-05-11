@@ -2096,6 +2096,7 @@ function removeOrphanCells(graph, keepIds)
   for (var r = 0; r < removedIds.length; r++)
   {
     delete animatedCellIds[removedIds[r]];
+    delete popInEndsAt[removedIds[r]];
     var pi = pendingAnimCellIds.indexOf(removedIds[r]);
     if (pi >= 0) pendingAnimCellIds.splice(pi, 1);
     var di = deferredAnimCellIds.indexOf(removedIds[r]);
@@ -2115,6 +2116,13 @@ var animBatchStartT = 0;
 var deferredAnimCellIds = [];
 var deferredAnimTimer = null;
 var animatedCellIds = {};
+// Per-cell timestamp when the in-flight pop-in animation (opacity +
+// transform on the shape node) will be settled. Used by applyMorphAnimations
+// to skip CSS-translate morphs on cells whose pop-in hasn't finished —
+// otherwise morphNodeBy overwrites the style.transition that drives the
+// pop-in, causing the cell to snap to its final pop-in state before
+// starting to slide.
+var popInEndsAt = {};
 // Absolute timestamp when the most-recently-flushed batch's pop-in
 // animations are fully settled (opacity has reached 1 on every cell).
 // waitForPendingAnimationsToSettle uses this to gate mxMorphing so it
@@ -2295,6 +2303,11 @@ function flushCellAnimations(graph)
     var vs = graph.view.getState(vCell);
     if (vs == null) continue;
     var delaySec = (schedule.vertexDelay[vCell.id] || 0) / 1000;
+
+    // 400 ms = pop-in transition duration in popInVertexNode. Cells whose
+    // geometry shifts inside this window get their morph deferred until
+    // after pop-in settles (see applyMorphAnimations).
+    popInEndsAt[vCell.id] = nowFlush + (delaySec * 1000) + 400;
 
     if (vs.shape != null && vs.shape.node != null)
     {
@@ -2630,6 +2643,8 @@ function applyMorphAnimations(graph)
 
   var model = graph.getModel();
   var morphedIdSet = {};
+  var nowMorph = (typeof performance !== 'undefined' && performance.now)
+    ? performance.now() : Date.now();
 
   for (var i = 0; i < ids.length; i++)
   {
@@ -2646,6 +2661,14 @@ function applyMorphAnimations(graph)
     var dy = pre.y - state.y;
 
     if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
+
+    // Skip morph if the cell's pop-in transition hasn't settled yet —
+    // morphNodeBy would overwrite style.transition and snap opacity /
+    // transform to their final pop-in values, producing a visible flicker.
+    // The cell stays at its new model position (slight teleport) which is
+    // imperceptible during a fade-in. Edges connected to it are routed to
+    // the new endpoint already, so we don't queue a pen-redraw either.
+    if (popInEndsAt[id] != null && popInEndsAt[id] > nowMorph) continue;
 
     morphedIdSet[id] = true;
 
@@ -2680,16 +2703,30 @@ function morphNodeBy(node, dx, dy)
   // where the cell is currently visible.
   var current = parseTranslate(node);
 
-  // Cancel any in-flight transition before we set the new start value,
-  // otherwise the assignment itself would animate.
-  node.style.transition = 'none';
+  // Compose with any existing transition (e.g. an in-flight pop-in
+  // animating opacity / transform) instead of overwriting — overwriting
+  // would kill the other transitions and snap them to their final inline
+  // values, producing a visible flicker. We drop only the prior
+  // 'translate' entry so our new translate transition replaces it cleanly.
+  var prior = (node.style.transition || '')
+    .split(',')
+    .map(function(s) { return s.trim(); })
+    .filter(function(s)
+    {
+      return s.length > 0 && s.indexOf('translate') !== 0;
+    });
+
+  // Cancel any in-flight translate transition before we set the new
+  // start value, otherwise the assignment itself would animate.
+  node.style.transition = (prior.length > 0 ? prior.join(', ') + ', ' : '') + 'translate 0s';
   node.style.translate = (dx + current.x) + 'px ' + (dy + current.y) + 'px';
 
   // Force layout flush so the start state is captured before we
   // re-enable transitions.
   node.getBoundingClientRect();
 
-  node.style.transition = 'translate ' + MORPH_DURATION_MS + 'ms ease-out';
+  var newTranslate = 'translate ' + MORPH_DURATION_MS + 'ms ease-out';
+  node.style.transition = (prior.length > 0 ? prior.join(', ') + ', ' : '') + newTranslate;
 
   // Per-node token: a stale setTimeout from a prior morph must not
   // clear transition/translate while a fresh morph is mid-flight.
@@ -3767,6 +3804,7 @@ function endStreaming()
   pendingAnimCellIds = [];
   deferredAnimCellIds = [];
   animatedCellIds = {};
+  popInEndsAt = {};
   lastAnimEndT = 0;
 
   if (deferredAnimTimer != null)
