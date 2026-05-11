@@ -694,6 +694,38 @@ function healMermaidText(partialText)
 }
 
 /**
+ * Returns the first significant Mermaid line — the diagram-type
+ * directive (e.g. "flowchart TD") — with blank lines, %% comments, and
+ * any leading "--- ... ---" frontmatter block skipped. Returns null if
+ * no such line exists.
+ */
+function firstMermaidDirectiveLine(text)
+{
+  if (text == null || typeof text !== 'string') return null;
+  var lines = text.split(/\\r?\\n/);
+  var inFrontmatter = false;
+  var sawOpener = false;
+  for (var i = 0; i < lines.length; i++)
+  {
+    var line = lines[i].trim();
+    if (line === '' || line.indexOf('%%') === 0) continue;
+    if (inFrontmatter)
+    {
+      if (line === '---') inFrontmatter = false;
+      continue;
+    }
+    if (!sawOpener && line === '---')
+    {
+      inFrontmatter = true;
+      sawOpener = true;
+      continue;
+    }
+    return line;
+  }
+  return null;
+}
+
+/**
  * Returns true if the Mermaid text declares a flowchart (or its legacy
  * "graph" synonym). Used to surface the layout-cycle button on
  * flowcharts even when the LLM didn't request a postLayout — they're
@@ -701,16 +733,10 @@ function healMermaidText(partialText)
  */
 function isMermaidFlowchart(text)
 {
-  if (text == null || typeof text !== 'string') return false;
-  var lines = text.split(/\\r?\\n/);
-  for (var i = 0; i < lines.length; i++)
-  {
-    var line = lines[i].trim();
-    if (line === '' || line.indexOf('%%') === 0) continue;
-    var first = line.split(/\\s+/)[0];
-    return first === 'flowchart' || first === 'graph';
-  }
-  return false;
+  var line = firstMermaidDirectiveLine(text);
+  if (line == null) return false;
+  var first = line.split(/\\s+/)[0];
+  return first === 'flowchart' || first === 'graph';
 }
 
 /**
@@ -720,19 +746,13 @@ function isMermaidFlowchart(text)
  */
 function isMermaidHorizontalFlowchart(text)
 {
-  if (text == null || typeof text !== 'string') return false;
-  var lines = text.split(/\\r?\\n/);
-  for (var i = 0; i < lines.length; i++)
-  {
-    var line = lines[i].trim();
-    if (line === '' || line.indexOf('%%') === 0) continue;
-    var parts = line.split(/\\s+/);
-    var first = parts[0];
-    if (first !== 'flowchart' && first !== 'graph') return false;
-    var orient = (parts[1] || '').toUpperCase();
-    return orient === 'LR' || orient === 'RL';
-  }
-  return false;
+  var line = firstMermaidDirectiveLine(text);
+  if (line == null) return false;
+  var parts = line.split(/\\s+/);
+  var first = parts[0];
+  if (first !== 'flowchart' && first !== 'graph') return false;
+  var orient = (parts[1] || '').toUpperCase();
+  return orient === 'LR' || orient === 'RL';
 }
 
 /**

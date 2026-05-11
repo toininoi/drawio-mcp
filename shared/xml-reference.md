@@ -469,7 +469,7 @@ For cases where you want a **full** re-layout — moving vertices to canonical p
 **When NOT to use:**
 - The user has asked for specific positions (swim lanes with exact lanes, architecture diagrams with meaningful spatial arrangement).
 - The diagram relies on containers/grouping where spatial layout encodes information.
-- For Mermaid diagrams — the native Mermaid layout already runs through full ELK; `postLayout` would override that with a different algorithm.
+- For most Mermaid diagrams the native parser's own ELK layout is already good — but **not for complex flowcharts**, where the native layout goes cramped or unbalanced. See the `postLayout` parameter description for the trigger thresholds (≥ ~20 nodes, ≥ 3 decision diamonds, feedback edges, ≥ 3 endpoints); when any of those holds, set `postLayout: "verticalFlow"` (for `flowchart TD/TB`) or `"horizontalFlow"` (for `flowchart LR/RL`) along with `startNodeIds` and `endNodeIds`. For non-flowchart Mermaid types (sequence, class, ER, sankey, etc.) `postLayout` doesn't apply.
 
 ## Style reference
 
