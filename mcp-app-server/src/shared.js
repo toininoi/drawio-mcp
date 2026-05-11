@@ -756,22 +756,6 @@ function isMermaidHorizontalFlowchart(text)
 }
 
 /**
- * True when the Mermaid source begins with a "--- title: ... ---"
- * frontmatter block. ELK's horizontalFlow layout has no concept of a
- * title and stuffs it into the leftmost layer alongside the flow nodes,
- * crushing the diagram. Used to suppress a requested horizontalFlow
- * postLayout (verticalFlow puts the title in its own top row and is
- * fine, so it isn't blocked).
- */
-function mermaidHasTitleFrontmatter(text)
-{
-  if (text == null || typeof text !== 'string') return false;
-  var m = /^\\s*---\\s*\\r?\\n([\\s\\S]*?)\\r?\\n---\\s*(\\r?\\n|$)/.exec(text);
-  if (!m) return false;
-  return /^\\s*title\\s*:/m.test(m[1]);
-}
-
-/**
  * 32-bit FNV-1a hash, hex string. Stable across runs and across browsers.
  * Used to derive content-addressed cell IDs.
  */
@@ -1430,6 +1414,22 @@ function applyPostLayout(graph, algorithm, hints, onDone, onMorphStart, awaitBef
     return;
   }
 
+  // For layered: top-level cells with no edges and no children (e.g.
+  // mermaid's frontmatter title, inserted as a standalone text vertex)
+  // would otherwise get assigned to the first layer alongside the flow
+  // start — fine on verticalFlow (top row) but crushes horizontalFlow
+  // (leftmost column). The drawio-elk bridge exposes a pre/post hook
+  // for this: extractIsolatedTopLevel strips them from the ELK input;
+  // placeIsolatedTopLevelAbove re-places them above the laid-out bbox
+  // after applyElkLayout.
+  var isolatedNodes = [];
+  if (layout.algorithm === 'layered'
+      && typeof ElkLayout !== 'undefined'
+      && typeof ElkLayout.extractIsolatedTopLevel === 'function')
+  {
+    isolatedNodes = ElkLayout.extractIsolatedTopLevel(elkGraph) || [];
+  }
+
   // For layered layouts (verticalFlow / horizontalFlow), pin Start/End
   // nodes to the first/last layer. When the LLM gave explicit ID lists
   // via startNodeIds / endNodeIds, use those verbatim — they reflect
@@ -1544,6 +1544,14 @@ function applyPostLayout(graph, algorithm, hints, onDone, onMorphStart, awaitBef
       if (layout.algorithm === 'layered')
       {
         normalizeEdgesToRounded(graph);
+      }
+      if (isolatedNodes.length > 0
+          && typeof ElkLayout !== 'undefined'
+          && typeof ElkLayout.placeIsolatedTopLevelAbove === 'function'
+          && layout._elkToCellMap != null)
+      {
+        ElkLayout.placeIsolatedTopLevelAbove(
+          graph, model, layout._elkToCellMap, isolatedNodes, elkGraph.children);
       }
       committed = true;
     }
@@ -5176,11 +5184,6 @@ app.ontoolinputpartial = function(params)
       {
         mermaidEarlyFinalizeFired = true;
         var earlyPostLayout = args.postLayout || null;
-        if (earlyPostLayout === 'horizontalFlow' &&
-            mermaidHasTitleFrontmatter(partialMermaid))
-        {
-          earlyPostLayout = null;
-        }
         var earlyOpts = {
           skipIntroAnim: true,
           fadeIn: true,
@@ -5330,13 +5333,6 @@ app.ontoolinput = function(params)
 
   var mermaidText = args.mermaid;
 
-  if (postLayout === 'horizontalFlow' &&
-      mermaidText != null && typeof mermaidText === 'string' &&
-      mermaidHasTitleFrontmatter(mermaidText))
-  {
-    postLayout = null;
-  }
-
   var layoutOpts = { skipIntroAnim: true, fadeIn: true, postLayout: postLayout, startNodeIds: startNodeIds, endNodeIds: endNodeIds };
 
   if (mermaidText != null && typeof mermaidText === 'string')
@@ -5420,11 +5416,6 @@ app.ontoolresult = function(result)
         postLayout = parsed.postLayout || null;
         startNodeIds = parsed.startNodeIds || null;
         endNodeIds = parsed.endNodeIds || null;
-        if (postLayout === 'horizontalFlow' &&
-            mermaidHasTitleFrontmatter(mermaidText))
-        {
-          postLayout = null;
-        }
       }
       else if (parsed && typeof parsed.xml === 'string')
       {
@@ -6414,7 +6405,7 @@ export function createServer(html, options = {})
             "- `stress` (ELK stress majorization): small-to-mid general graphs where `force` looks too loose — usually tighter and more readable for 10-30 nodes without a root.\n" +
             "- `radial` (ELK radial): concentric layers around a root (mind maps, centered ego networks, influence diagrams).\n" +
             "**Omit** for diagrams whose layout carries meaning you hand-crafted: swimlanes/pools, containers, architecture / deployment / network topology with grouped regions, P&ID or circuit schematics, floor plans, UML diagrams with deliberate placement.\n\n" +
-            "**For Mermaid flowcharts**, the native parser does its own layout, but it produces cramped or unbalanced output once the diagram has any structural complexity. Request `postLayout` whenever ANY of the following holds: ≥ ~20 nodes, OR ≥ 3 decision diamonds (`{...}` shapes), OR any feedback/back-edges (an edge that points to an earlier node, e.g. an error path looping back to a retry), OR ≥ 3 distinct endpoints. Pass `postLayout: \"verticalFlow\"` (for `flowchart TD/TB`) or `postLayout: \"horizontalFlow\"` (for `flowchart LR/RL`) along with `startNodeIds` and `endNodeIds` to re-layout via the same ELK algorithm draw.io's editor uses. **Exception: omit `horizontalFlow` whenever the source uses a `--- title: ... ---` frontmatter block — use `verticalFlow` or no postLayout instead.** ELK's `horizontalFlow` has no concept of a title and squashes it into the leftmost layer alongside the flow nodes, which crushes the actual diagram. `verticalFlow` is unaffected (the title sits in its own top row), so it remains a valid choice for titled top-down flowcharts. Skip for simple flowcharts (linear chains, < 20 nodes, no branching/back-edges) and for non-flowchart Mermaid types (sequence, class, ER, sankey, etc. — postLayout doesn't apply).\n\n" +
+            "**For Mermaid flowcharts**, the native parser does its own layout, but it produces cramped or unbalanced output once the diagram has any structural complexity. Request `postLayout` whenever ANY of the following holds: ≥ ~20 nodes, OR ≥ 3 decision diamonds (`{...}` shapes), OR any feedback/back-edges (an edge that points to an earlier node, e.g. an error path looping back to a retry), OR ≥ 3 distinct endpoints. Pass `postLayout: \"verticalFlow\"` (for `flowchart TD/TB`) or `postLayout: \"horizontalFlow\"` (for `flowchart LR/RL`) along with `startNodeIds` and `endNodeIds` to re-layout via the same ELK algorithm draw.io's editor uses. Skip for simple flowcharts (linear chains, < 20 nodes, no branching/back-edges) and for non-flowchart Mermaid types (sequence, class, ER, sankey, etc. — postLayout doesn't apply).\n\n" +
             "**When you set this to `verticalFlow` or `horizontalFlow`, you MUST also provide `startNodeIds` and `endNodeIds`** so ELK knows which nodes belong in the first and last layers."
           ),
         startNodeIds: z
