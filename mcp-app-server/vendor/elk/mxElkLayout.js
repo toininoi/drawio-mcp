@@ -170,40 +170,6 @@ mxElkLayout.prototype.buildElkGraph = function(parent)
 
 // ─── applyElkLayout ──────────────────────────────────────────────
 
-// Clears stale exitX/Y / entryX/Y on every edge under `parent`,
-// recursively. Mermaid's drawio export pre-sets these connection-point
-// constraints (e.g. exitX=0.5, exitY=1) so its own renderer attaches the
-// edge at a known side. After we re-layout with ELK, only same-scope
-// edges get rewritten by ElkApplier._applyEndpointConstraint —
-// cross-scope edges keep mermaid's stale values, which the orthogonal
-// router then honors instead of the ELK polyline, producing visibly
-// off-axis terminals. Strip them up-front so the applier's later writes
-// (for same-scope edges) start from a clean slate, and cross-scope
-// edges fall back to drawio's default attach computation.
-function _clearStaleConnectionConstraints(graph, parent)
-{
-	var model = graph.getModel();
-	var childCount = model.getChildCount(parent);
-
-	for (var i = 0; i < childCount; i++)
-	{
-		var cell = model.getChildAt(parent, i);
-
-		if (model.isEdge(cell) && model.isVisible(cell))
-		{
-			graph.setCellStyles('exitX', null, [cell]);
-			graph.setCellStyles('exitY', null, [cell]);
-			graph.setCellStyles('entryX', null, [cell]);
-			graph.setCellStyles('entryY', null, [cell]);
-		}
-
-		if (model.isVertex(cell) && model.getChildCount(cell) > 0 && !cell.collapsed)
-		{
-			_clearStaleConnectionConstraints(graph, cell);
-		}
-	}
-}
-
 mxElkLayout.prototype.applyElkLayout = function(elkGraph)
 {
 	if (typeof ElkApplier === 'undefined')
@@ -215,14 +181,6 @@ mxElkLayout.prototype.applyElkLayout = function(elkGraph)
 	{
 		throw new Error('applyElkLayout called before buildElkGraph.');
 	}
-
-	// Strip mermaid's pre-set exit/entry on every edge so the applier's
-	// per-edge rewrites (same-scope only) aren't fighting stale values
-	// on cross-scope edges. Same effect as drawio-dev's ElkLayout facade
-	// `_applyEdgeStyleRecursive` step, scoped to just the connection-
-	// point keys (orthogonal / rounded / curved are handled separately
-	// by shared.js's normalizeEdgesToRounded after applyElkLayout).
-	_clearStaleConnectionConstraints(this.graph, this.graph.getDefaultParent());
 
 	var applier = new ElkApplier(this.graph,
 		this._elkToCellMap,
