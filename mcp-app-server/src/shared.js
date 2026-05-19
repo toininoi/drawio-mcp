@@ -5951,25 +5951,22 @@ export function processMermaidBundle(raw)
 }
 
 /**
- * Process the drawio-elk bundle. Bundle ships as ESM and exports four
- * things drawio-mcp needs at runtime:
+ * Process the drawio-elk bundle. Two bundle formats have shipped:
  *
- *   default      → ELK engine class (used by mxElkLayout + drawio-mermaid)
- *   ElkLayout    → mxGraph ↔ ELK facade (extends mxGraphLayout)
- *   ElkAdapter   → mxGraph model → ELK JSON conversion
- *   ElkApplier   → ELK result → mxGraph mutations
+ *   - ESM: ends with `export { default, ElkLayout, ElkAdapter, ElkApplier }`.
+ *     Stripped + IIFE-wrapped + aliased to globalThis here.
+ *   - IIFE: self-contained, ends with `var ELK=(()=>{...})(); var ElkLayout=ELK.ElkLayout,...; ELK=ELK.default;`.
+ *     Already publishes the four globals; pass through as-is.
  *
- * All four are aliased to globalThis so the inlined classic scripts
- * (mxElkLayout.js, the viewer init code) see them as bare globals.
- *
- * Note: drawio-mcp's vendor README historically described the bundle
- * as IIFE — that was aspirational. The actual file shipped (and still
- * ships) is the ESM bundle (dist/elk.min.js from drawio-elk), wrapped
- * here in an IIFE by stripEsmExportsAndAlias to avoid global lexical
- * collisions with the other inlined bundles.
+ * Detect which format by looking for an `export {...}` statement.
  */
 export function processElkBundle(raw)
 {
+  if (!/export\s*\{[^}]*\}/.test(raw))
+  {
+    return raw;
+  }
+
   return stripEsmExportsAndAlias(raw,
     {
       ELK: "default",
