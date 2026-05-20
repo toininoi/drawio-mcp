@@ -91,22 +91,23 @@ When updating XML generation guidance, edit only `shared/xml-reference.md` — c
 
 ## Shape Search Index
 
-The `search_shapes` tool is powered by a pre-built index of all draw.io shapes. The index is generated from the draw.io client source code (`app.min.js`) by running all sidebar palette initializations in Node.js via jsdom and capturing the shape data.
+The `search_shapes` tool is powered by a pre-built index of all draw.io shapes. The index is generated from the live draw.io client (`https://app.diagrams.net/js/app.min.js`) by running all sidebar palette initializations in Node.js via jsdom and capturing the shape data.
+
+`shape-search/search-index.json` is committed to the repository and is **automatically refreshed on every draw.io release** via the [Update Shape Search Index](.github/workflows/update-search-index.yml) GitHub Action — no manual step is required to stay in sync with the latest shapes.
+
+To regenerate the index manually (e.g. when iterating on the generator itself):
 
 ```bash
-# Generate the shape search index (requires ../drawio-dev checkout)
 cd shape-search
 npm install
-DRAWIO_DEV_PATH=../../drawio-dev node generate-index.js
+npm run generate
 
 # Rebuild the MCP App Server worker to embed the updated index
 cd ../mcp-app-server
 npm run build:worker
 ```
 
-**When to regenerate:** Re-run `generate-index.js` after updating `drawio-dev` (new shapes, renamed stencils, updated style strings). The script loads `app.min.js` and all sidebar palettes, so it captures any changes to the shape libraries automatically.
-
-The generated `search-index.json` is committed to the repository so that the MCP App Server can be built and deployed without a local `drawio-dev` checkout.
+The generator fetches `app.min.js` directly from the public draw.io web app, so no local checkout of the draw.io source is needed.
 
 ---
 
