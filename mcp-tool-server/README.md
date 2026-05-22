@@ -86,6 +86,24 @@ Configure your MCP client to run the server via stdio:
 npx @drawio/mcp
 ```
 
+### Self-hosted draw.io
+
+To open diagrams in a self-hosted draw.io instance, set the `DRAWIO_BASE_URL` environment variable to your instance URL (default: `https://app.diagrams.net/`):
+
+```json
+{
+  "mcpServers": {
+    "drawio": {
+      "command": "npx",
+      "args": ["-y", "@drawio/mcp"],
+      "env": {
+        "DRAWIO_BASE_URL": "https://drawio.example.com/"
+      }
+    }
+  }
+}
+```
+
 ## Tools
 
 ### `open_drawio_xml`

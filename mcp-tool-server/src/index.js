@@ -11,7 +11,7 @@ import { fileURLToPath } from "url";
 import { tmpdir } from "os";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DRAWIO_BASE_URL = "https://app.diagrams.net/";
+const DRAWIO_BASE_URL = process.env.DRAWIO_BASE_URL || "https://app.diagrams.net/";
 
 // Read the shared XML reference once at startup (single source of truth).
 // In the repo: read from shared/. When installed via npm: read from the
